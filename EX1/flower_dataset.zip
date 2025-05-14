@@ -1,1 +1,137 @@
+\\config.py
+from mmpretrain.models import ResNet
+from mmpretrain.datasets import ImageNet
+from mmpretrain.optim import SGD, CosineAnnealingLR
+from mmpretrain.trainers import ClassificationTrainer
 
+model = dict(
+    type=ResNet,
+    depth=50,
+    num_classes=5,
+    backbone=dict(
+        type='ResNet',
+        depth=50,
+        num_stages=4,
+        out_indices=(3,),
+        style='pytorch'
+    ),
+    head=dict(
+        type='LinearClsHead',
+        num_classes=5,
+        in_channels=2048,
+        loss=dict(type='CrossEntropyLoss', loss_weight=1.0),
+        topk=(1, 5)
+    )
+)
+
+train_dataloader = dict(
+    batch_size=32,
+    num_workers=4,
+    dataset=dict(
+        type=ImageNet,
+        data_root='train',
+        split='train',
+        pipeline=[
+            dict(type='LoadImageFromFile'),
+            dict(type='Resize', size=(224, 224)),
+            dict(type='RandomFlip', prob=0.5, direction='horizontal'),
+            dict(type='PackInputs')
+        ]
+    ),
+    sampler=dict(type='DefaultSampler', shuffle=True)
+)
+
+val_dataloader = dict(
+    batch_size=32,
+    num_workers=4,
+    dataset=dict(
+        type=ImageNet,
+        data_root='val',
+        split='val',
+        pipeline=[
+            dict(type='LoadImageFromFile'),
+            dict(type='Resize', size=(224, 224)),
+            dict(type='PackInputs')
+        ]
+    ),
+    sampler=dict(type='DefaultSampler', shuffle=False)
+)
+
+optim_wrapper = dict(
+    type=SGD,
+    lr=0.001,
+    momentum=0.9,
+    weight_decay=0.0001
+)
+
+param_scheduler = dict(
+    type=CosineAnnealingLR,
+    eta_min=0.0001,
+    T_max=10
+)
+
+trainer = dict(
+    type=ClassificationTrainer,
+    max_epochs=10,
+    val_interval=1,
+    val_metric='accuracy',
+    save_best='accuracy_top-1',
+    log_level='INFO',
+    log_interval=50
+)
+
+load_from = 'path/to/your/pretrained/model.pth'
+\\train_model.py
+import torch
+import mmpretrain
+from mmpretrain import get_root_logger
+from mmpretrain.models import build_model
+from mmpretrain.datasets import build_dataloader, build_dataset
+from mmpretrain.optim import build_optim_wrapper, build_param_scheduler
+from mmpretrain.trainers import build_trainer
+from config import *
+
+def main():
+    model = build_model(model)
+
+    train_dataset = build_dataset(train_dataloader['dataset'])
+    train_dataloader = build_dataloader(
+        train_dataset,
+        batch_size=train_dataloader['batch_size'],
+        num_workers=train_dataloader['num_workers'],
+        sampler=train_dataloader['sampler']
+    )
+
+    val_dataset = build_dataset(val_dataloader['dataset'])
+    val_dataloader = build_dataloader(
+        val_dataset,
+        batch_size=val_dataloader['batch_size'],
+        num_workers=val_dataloader['num_workers'],
+        sampler=val_dataloader['sampler']
+    )
+
+    optim_wrapper = build_optim_wrapper(model, optim_wrapper)
+
+    param_scheduler = build_param_scheduler(optim_wrapper, param_scheduler)
+
+    trainer = build_trainer(
+        dict(
+            model=model,
+            train_dataloader=train_dataloader,
+            val_dataloader=val_dataloader,
+            optim_wrapper=optim_wrapper,
+            param_scheduler=param_scheduler,
+            **trainer
+        )
+    )
+
+    if load_from:
+        checkpoint = torch.load(load_from)
+        model.load_state_dict(checkpoint['state_dict'])
+
+    trainer.train()
+
+if __name__ == '__main__':
+    logger = get_root_logger()
+    mmpretrain.utils.set_random_seed(0)
+    main()
